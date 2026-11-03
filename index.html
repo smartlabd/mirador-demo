@@ -613,6 +613,7 @@ var NOTIFS=[
  {cat:"Cobranza",sev:"crit",t:hl.n+" pasó su límite de crédito",b:"Nuevo pedido por "+money(14200)+" retenido hasta que gerencia lo apruebe.",m:240,go:"cobranza"},
  {cat:"Cobranza",sev:"info",t:"Secuencia de cobranza: 23 recordatorios enviados hoy",b:"17 por WhatsApp y 6 por correo. 4 clientes respondieron con fecha de pago.",m:300,go:"cobranza"},
  {cat:"Ventas",sev:"good",t:"Automercados La Cima cerró su mejor semana del año",b:"Compró 22% más que su promedio, sobre todo manzanas y uvas.",m:1500,go:"ventas"},
+ {cat:"Compras",sev:"good",t:"Uva Red Globe: Exportadora del Maule bajó su precio",b:"Costo puesto 6% bajo la última compra; quedan 2,6 días de inventario. La sugerencia está lista para gerencia.",m:70,go:"precios"},
  {cat:"Equipo",sev:"info",t:"Despacho cargó 4 guías de despacho",b:"Último archivo a las 2:45 a. m. en el canal #despacho.",m:1560,go:"equipo"}
 ].map(function(n,i){n.id="n"+i;n.read=i>8;return n;});
 var LIVE=[
@@ -637,13 +638,14 @@ var RULES=[
  {id:"r11",cat:"Flota",sev:"crit",n:"Documento de vehículo o chofer por vencer",d:"RCV, póliza, revisión de la unidad de frío, licencia y certificado médico.",cond:["Avisar",15,"días antes y el día que vence"],who:["Logística","Chofer"],ch:{app:1,wa:1,mail:0},on:1},
  {id:"r12",cat:"Ventas",sev:"warn",n:"Ventas del día por debajo de la proyección",d:"Corte diario por sede a las 4:00 p. m.",cond:["Avisar si van",15,"% por debajo"],who:["Ronald","Gerentes de sede"],ch:{app:1,wa:1,mail:0},on:1},
  {id:"r13",cat:"Ventas",sev:"crit",n:"Factura con margen por debajo del mínimo",d:"Detecta descuentos excesivos o precios desactualizados.",cond:["Avisar con margen menor a",12,"%"],who:["Gerente comercial"],ch:{app:1,wa:0,mail:1},on:0},
+ {id:"r15",cat:"Compras",sev:"info",n:"Mejor precio de compra disponible",d:"Cuando un listado nuevo trae un costo puesto menor que la última compra de un rubro.",cond:["Avisar si es",3,"% menor que la última compra"],who:["Compras","Gerencia"],ch:{app:1,wa:1,mail:0},on:1},
  {id:"r14",cat:"Resumen",sev:"info",n:"Resumen diario para la dirección",d:"Ventas de ayer, dinero en la calle, cobros, alertas críticas y contenedores.",cond:["Enviar todos los días a las",7,":00 a. m."],who:["Ronald","Franklin","Maritza"],ch:{app:1,wa:1,mail:1},on:1}
 ];
 
 /* ============ Navegación ============ */
 var VIEWS=[
  {g:"Decisiones",items:[["resumen","Resumen","home"],["cobranza","Cobranza","wallet"],["clientes","Clientes que dejan de pedir","users"],["ventas","Ventas y márgenes","chart"],["inventario","Inventario e importaciones","box"]]},
- {g:"Operación",items:[["pagos","Pagos reportados","card","nuevo"],["flota","Flota y documentos","truck","nuevo"],["equipo","Canales del equipo","msg","nuevo"]]},
+ {g:"Operación",items:[["precios","Precios de mercado","bolt","nuevo"],["pagos","Pagos reportados","card","nuevo"],["flota","Flota y documentos","truck","nuevo"],["equipo","Canales del equipo","msg","nuevo"]]},
  {g:"Sistema",items:[["notificaciones","Notificaciones","bell"],["conexion","Conexión con Profit","plug"]]}
 ];
 function renderSide(){
@@ -678,7 +680,7 @@ function lineChart(el,cfg){
   var s='<svg viewBox="0 0 '+W+' '+H+'" height="'+H+'" role="img" aria-label="'+h(cfg.aria||"")+'">';
   for(var k=0;k<=4;k++){var v=max*k/4,yy=y(v);s+='<line class="'+(k?"grid-l":"base-l")+'" x1="'+m.l+'" x2="'+(W-m.r)+'" y1="'+yy+'" y2="'+yy+'"/><text x="'+(m.l-8)+'" y="'+(yy+4)+'" text-anchor="end">'+h(cfg.fmt(v))+'</text>';}
   var every=W<520?2:1;
-  cfg.labels.forEach(function(l,i){if(i%every===0||i===n-1)s+='<text x="'+x(i)+'" y="'+(H-8)+'" text-anchor="middle">'+h(l)+'</text>';});
+  cfg.labels.forEach(function(l,i){if((i%every===0&&!(every>1&&i===n-2))||i===n-1)s+='<text x="'+x(i)+'" y="'+(H-8)+'" text-anchor="middle">'+h(l)+'</text>';});
   cfg.series.forEach(function(se,si){
     var d=se.values.map(function(v,i){return(i?"L":"M")+x(i).toFixed(1)+","+y(v).toFixed(1);}).join("");
     if(si===0)s+='<path d="'+d+"L"+x(n-1)+","+y(0)+"L"+x(0)+","+y(0)+'Z" fill="'+se.color+'" opacity=".09"/>';
@@ -879,6 +881,57 @@ V.inventario=function(){
   return{html:html,after:function(){bindBarTips($("#view"));}};
 };
 
+function moneyC(v){var bs=state.moneda==="VES";return(bs?"Bs ":"US$ ")+nf(bs?v*TASA:v,2);}
+/* ============ Precios de mercado y compras ============ */
+var PROV=[
+ {id:"pm",n:"Exportadora del Maule",pais:"Chile",puerto:"San Antonio",dias:14,fl:3.1},
+ {id:"af",n:"Andes Fresh Export",pais:"Chile",puerto:"Valparaíso",dias:15,fl:3.2},
+ {id:"rn",n:"Río Negro Fruit",pais:"Argentina",puerto:"San Antonio Este",dias:18,fl:3.6},
+ {id:"po",n:"Pacific Orchards",pais:"EE. UU.",puerto:"Seattle",dias:16,fl:3.4},
+ {id:"cv",n:"Cape Valley Fruit",pais:"Sudáfrica",puerto:"Ciudad del Cabo",dias:24,fl:4.6}
+];
+var PRV={};PROV.forEach(function(p){PRV[p.id]=p;});
+var OFERTA_PROV={mfa:["po","pm","af"],mga:["pm","af","rn","po"],mgs:["af","rn","cv"],per:["rn","pm","cv"],uvr:["pm","af","cv"],uvv:["af","pm"],kiw:["pm","af"],cir:["pm","af"],dur:["af","pm"],cer:["pm","af"],ara:["af","pm"],nis:["pm"],man:["af","cv"],lim:["rn"]};
+function landed(fob,p){return fob+p.fl+fob*.14+1.2;}
+var OFERTAS={},ULT={};
+RUBROS.forEach(function(x){
+  var cost=x.p*(1-x.m);ULT[x.id]=cost;
+  var base=(cost-1.2-3.3)/1.14;
+  OFERTAS[x.id]=OFERTA_PROV[x.id].map(function(pid){var p=PRV[pid];var fob=base*r(.93,1.12);if(x.id==="uvr"&&pid==="pm")fob=base*.86;if(x.id==="mga"&&pid==="rn")fob=base*.84;
+    return{p:p,fob:fob,costo:landed(fob,p),cal:["80-90","90-100","100-113","113-125"][ri(0,3)]};}).sort(function(a,b){return a.costo-b.costo;});
+});
+var HIST_SEM=["S34","S35","S36","S37","S38","S39","S40","S41","S42","S43","S44","S45"];
+var HIST_CACHE={};
+function histOrigen(rid,pais){var key=rid+pais;if(HIST_CACHE[key])return HIST_CACHE[key];var o=OFERTAS[rid].filter(function(x){return x.p.pais===pais;})[0];if(!o)return null;var v=o.fob,out=[];for(var i=11;i>=0;i--){out.unshift(v);v=v*(1+r(-.035,.04));}HIST_CACHE[key]=out;return out;}
+var LISTADOS=[
+ ["Lista_semana45_Maule.pdf","Exportadora del Maule","PDF",186,"ok",1],["Precios Andes Fresh 03-11.xlsx","Andes Fresh Export","Excel",142,"ok",1],
+ ["Foto de lista Río Negro (WhatsApp)","Río Negro Fruit","Foto",64,"rev",1],["Pacific Orchards weekly FOB","Pacific Orchards","Correo",98,"ok",2],
+ ["CapeValley_offer_wk44.pdf","Cape Valley Fruit","PDF",77,"ok",6],["Lista_semana44_Maule.pdf","Exportadora del Maule","PDF",181,"ok",8]
+];
+function sugerencias(){
+  var out=[];RUBROS.forEach(function(x){var b=OFERTAS[x.id][0],d=b.costo/ULT[x.id]-1;var cj=DIARIA[x.id]*30;
+    var urg=DINV[x.id]<4;if(d<-.03||urg)out.push({r:x,o:b,d:d,ahorro:Math.max(0,(ULT[x.id]-b.costo)*cj),urg:urg});});
+  return out.sort(function(a,b){return(b.urg-a.urg)||(b.ahorro-a.ahorro);});
+}
+V.precios=function(){
+  var sg=sugerencias(),ah=sum(sg,function(s){return s.ahorro;});
+  var rid=state.rubPrecio||"mga",x=RB[rid],ofs=OFERTAS[rid];
+  var html=vhead("Fase 2 · módulo nuevo","Precios de mercado y compras",'Los listados de precios de proveedores y exportadores se leen con inteligencia artificial y se comparan por rubro, calibre y origen. El panel calcula el costo puesto en almacén y sugiere dónde conviene comprar. La gerencia decide.',src("new","Módulo nuevo"));
+  html+='<div class="grid g-kpi">'+kpi({l:"Listados leídos esta semana",v:"7",f:"1.284 precios de 5 proveedores"})+kpi({l:"Ahorro posible este mes",v:money(ah),f:"Comprando la mejor opción de cada rubro"})+kpi({l:"Rubros con mejor precio",v:String(sg.filter(function(s){return s.d<-.03;}).length),f:"Más de 3% bajo la última compra"})+kpi({l:"Precio FOB promedio",v:"−2,4%",f:'<span class="up">Bajó</span> contra la semana pasada'})+'</div>';
+  html+='<div class="card"><div class="card-h"><div><h2>Sugerencias de compra para esta semana</h2><p>Ordenadas por urgencia de inventario y ahorro. Costo puesto en almacén = FOB + flete + gastos de importación.</p></div></div><div class="list">'+
+   sg.slice(0,5).map(function(s){return'<div class="li"><div class="sev sev-'+(s.urg?"crit":"good")+'">'+ic(s.urg?"alert":"check",16)+'</div><div><h4>'+h(s.r.n)+' · '+h(s.o.p.n)+' ('+h(s.o.p.pais)+')</h4><p>Costo puesto <b>'+moneyC(s.o.costo)+'</b> por caja · <span class="'+(s.d<0?"up":"down")+'">'+pct(s.d)+'</span> contra la última compra ('+moneyC(ULT[s.r.id])+'). Llega en '+s.o.p.dias+' días si se ordena hoy.</p>'+(s.urg?'<p class="note"><b class="down">Urgente:</b> quedan '+nf(DINV[s.r.id],1)+' días de inventario.</p>':'<p class="note">Ahorro estimado del mes: '+money(s.ahorro)+'</p>')+'</div><button class="act-btn" data-act="rowmenu" data-kind="compra" data-id="'+s.r.id+'">Acciones '+ic("down",14)+'</button></div>';}).join("")+'</div></div>';
+  html+='<div class="card"><div class="card-h"><div><h2>Comparador por rubro</h2><p>Ofertas vigentes para '+h(x.n)+', caja de '+h(x.caja)+'</p></div></div><div class="chips" style="margin-bottom:12px">'+["mga","mfa","per","uvr","kiw","cer"].map(function(k){return'<button class="chip" data-act="chip" data-g="rubPrecio" data-v="'+k+'" aria-pressed="'+(rid===k)+'">'+h(RB[k].n)+'</button>';}).join("")+'</div><div class="tbl-wrap"><table><thead><tr><th>Proveedor</th><th>Calibre</th><th class="r">FOB</th><th class="r">Flete</th><th class="r">Gastos</th><th class="r">Costo puesto</th><th class="r">Vs. última compra</th><th class="r">Tránsito</th><th></th><th class="r">Acciones</th></tr></thead><tbody>'+
+   ofs.map(function(o,i){var d=o.costo/ULT[rid]-1;return'<tr><td><span class="cl-name">'+h(o.p.n)+'</span><span class="sub">'+h(o.p.pais)+' · '+h(o.p.puerto)+'</span></td><td class="mono">'+o.cal+'</td><td class="r num">'+moneyC(o.fob)+'</td><td class="r num">'+moneyC(o.p.fl)+'</td><td class="r num">'+moneyC(o.fob*.14+1.2)+'</td><td class="r num"><b>'+moneyC(o.costo)+'</b></td><td class="r '+(d<0?"up":"down")+'">'+pct(d)+'</td><td class="r num">'+o.p.dias+' días</td><td>'+(i===0?pill("good","Mejor opción"):"")+'</td><td class="r"><button class="act-btn" data-act="rowmenu" data-kind="oferta" data-id="'+rid+"|"+o.p.id+'">Acciones '+ic("down",14)+'</button></td></tr>';}).join("")+'</tbody></table></div><p class="note" style="margin-top:10px">Montos por caja. Los gastos de importación usan un supuesto de 14% del FOB más US$ 1,20 de manejo; se ajustan con sus costos reales.</p></div>';
+  html+='<div class="grid g-halves"><div class="card"><div class="card-h"><div><h2>Precio FOB por origen</h2><p>'+h(x.n)+' · últimas 12 semanas</p></div></div><div class="chart" id="ch-fob"></div><div class="legend" id="lg-fob"></div></div>'+
+   '<div class="card"><div class="card-h"><div><h2>Listados recibidos</h2><p>Se suben como archivo o se reenvían por correo o WhatsApp</p></div>'+src("new","Lectura con IA")+'</div><div class="list">'+
+   LISTADOS.map(function(l){return'<div class="li"><div class="sev sev-'+(l[4]==="ok"?"info":"warn")+'">'+ic("file",16)+'</div><div><h4>'+h(l[0])+'</h4><p>'+h(l[1])+' · '+l[2]+' · '+l[3]+' precios leídos</p></div><div style="text-align:right">'+(l[4]==="ok"?pill("good","Leído"):pill("warn","Revisar 3 líneas"))+'<div class="meta" style="margin-top:4px">hace '+l[5]+(l[5]>1?" días":" día")+'</div></div></div>';}).join("")+'</div></div></div>';
+  return{html:html,after:function(){
+    var ser=[];["Chile","Argentina","EE. UU.","Sudáfrica"].forEach(function(p){if(ser.length>=3)return;var hv=histOrigen(rid,p);if(hv)ser.push({name:p,values:hv,color:["var(--s1)","var(--s2)","var(--s3)"][ser.length]});});
+    lineChart($("#ch-fob"),{h:230,labels:HIST_SEM,full:HIST_SEM.map(function(s){return"Semana "+s.slice(1);}),aria:"Precio FOB por origen",fmt:function(v){return moneyC(v);},series:ser});
+    $("#lg-fob").innerHTML=ser.map(function(s){return'<span><i class="ln" style="border-color:'+s.color+'"></i>'+h(s.name)+'</span>';}).join("");
+  }};
+};
+
 V.pagos=function(){
   var ok=PAGOS.filter(function(p){return p.est==="ok";}),rev=PAGOS.filter(function(p){return p.est==="diff"||p.est==="dup";});
   var html=vhead("Fase 2 · módulo nuevo","Pagos reportados",'El cliente reporta su pago en un enlace. Un agente busca el correo de confirmación del banco, compara fecha, monto y referencia, y si todo coincide registra el abono en Profit.',src("new","Módulo nuevo"));
@@ -915,7 +968,7 @@ V.equipo=function(){
 };
 
 V.notificaciones=function(){
-  var cats=["Todas","Clientes","Cobranza","Pagos","Inventario","Ventas","Flota","Equipo"];
+  var cats=["Todas","Clientes","Cobranza","Compras","Pagos","Inventario","Ventas","Flota","Equipo"];
   var list=NOTIFS.filter(function(n){return state.ncat==="Todas"||n.cat===state.ncat;}).sort(function(a,b){return a.m-b.m;});
   var hoy=list.filter(function(n){return n.m<1440;}),ayer=list.filter(function(n){return n.m>=1440;});
   var on=RULES.filter(function(x){return x.on;}).length;
@@ -966,6 +1019,8 @@ var MENUS={
  cliente:function(c){return mi("chart","Ver historial de compras","Abriendo historial de "+c.n)+mi("wallet","Ver estado de cuenta","Abriendo estado de cuenta de "+c.n)+mi("send","Enviar mensaje","Mensaje enviado a "+c.n);},
  vend:function(n){return mi("users","Ver sus clientes","Filtrando clientes de "+n)+mi("send","Enviar su reporte del día","Reporte enviado a "+n);},
  inv:function(rid){var x=RB[rid];return mi("send","Ofertar a mayoristas","Oferta de "+x.n+" enviada a 8 mayoristas")+mi("box","Crear orden de compra","Borrador de orden de compra de "+x.n+" creado")+mi("bell","Avisar a despacho: sacar primero","Despacho notificado: sacar primero el lote más antiguo de "+x.n);},
+ compra:function(rid){var x=RB[rid],o=OFERTAS[rid][0];return mi("check","Crear orden de compra sugerida","Borrador de orden de compra: "+x.n+" con "+o.p.n)+mi("send","Pedir cotización formal","Solicitud enviada a "+o.p.n)+mi("users","Enviar a gerencia para aprobar","Sugerencia enviada a gerencia")+'<hr>'+mi("x","Descartar esta semana","Sugerencia descartada","danger");},
+ oferta:function(id){var a=id.split("|"),x=RB[a[0]],p=PRV[a[1]];return mi("check","Crear orden de compra","Borrador de orden de compra: "+x.n+" con "+p.n)+mi("send","Pedir cotización formal","Solicitud enviada a "+p.n)+mi("file","Ver listado original","Abriendo listado de "+p.n);},
  pago:function(p){return mi("check","Aprobar y abonar en Profit","Pago de "+p.cl+" abonado en Profit")+mi("msg","Pedir aclaratoria al cliente","Mensaje enviado a "+p.cl)+mi("file","Ver comprobante y correo del banco","Abriendo comprobante "+p.ref)+'<hr>'+mi("x","Rechazar pago","Pago de "+p.cl+" rechazado","danger");},
  flota:function(i){var f=FLOTA[i];return mi("file","Cargar documento renovado","Documento cargado para "+f.u)+mi("send","Avisar al chofer","Aviso enviado a "+f.chofer)+mi("truck","Ver historial de la unidad","Abriendo historial de "+f.u);}
 };
